@@ -1,0 +1,14 @@
+- hosts: localhost
+  tasks:
+    - name: Build docker image
+      community.docker.docker_image:
+        name: myapp
+        build:
+          path: .
+    - name: Run docker container
+      community.docker.docker_container:
+        name: myapp
+        image: myapp
+        ports:
+          - "8082:8080"
+

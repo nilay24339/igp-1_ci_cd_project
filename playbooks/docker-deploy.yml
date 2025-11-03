@@ -1,0 +1,27 @@
+- hosts: localhost
+  vars:
+    docker_repo: "nilay2497/myapp"
+    docker_tag: "latest"
+    container_name: "myapp-container"
+    port_mapping: "8081:8080"
+  tasks:
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: "{{ docker_repo }}"
+        tag: "{{ docker_tag }}"
+        build:
+          path: "../app"
+
+    - name: Remove old container if exists
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+
+    - name: Run Docker container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ docker_repo }}:{{ docker_tag }}"
+        state: started
+        ports:
+          - "{{ port_mapping }}"
+

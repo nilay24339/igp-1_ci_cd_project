@@ -1,0 +1,43 @@
+- hosts: localhost
+  tasks:
+    - name: Create Kubernetes Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: myapp-deployment
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: myapp
+            template:
+              metadata:
+                labels:
+                  app: myapp
+              spec:
+                containers:
+                  - name: myapp
+                    image: nilay2497/myapp:latest
+                    ports:
+                      - containerPort: 8080
+
+    - name: Create Kubernetes Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: myapp-service
+          spec:
+            selector:
+              app: myapp
+            ports:
+              - protocol: TCP
+                port: 8081
+                targetPort: 8080
+            type: NodePort
+
