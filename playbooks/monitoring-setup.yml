@@ -8,7 +8,6 @@
     node_exporter_version: "1.8.1"
 
   tasks:
-
     # --- System Preparation ---
     - name: Update APT packages
       apt:
@@ -44,22 +43,24 @@
       loop:
         - /etc/prometheus
         - /var/lib/prometheus
+        - /opt/prometheus
 
-    - name: Download Prometheus
+    - name: Download Prometheus tarball
       get_url:
         url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
         dest: /tmp/prometheus.tar.gz
         mode: '0644'
 
-    - name: Extract Prometheus
+    - name: Extract Prometheus to /opt/prometheus
       unarchive:
         src: /tmp/prometheus.tar.gz
-        dest: /opt/
+        dest: /opt/prometheus
         remote_src: yes
-        creates: /opt/prometheus-{{ prometheus_version }}.linux-amd64
+        extra_opts: [--strip-components=1]
+        creates: /opt/prometheus/prometheus
 
     - name: Copy Prometheus binaries
-      command: cp /opt/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }} /usr/local/bin/
+      command: cp /opt/prometheus/{{ item }} /usr/local/bin/
       args:
         creates: /usr/local/bin/{{ item }}
       loop:
@@ -101,14 +102,14 @@
           ExecStart=/usr/local/bin/prometheus \
             --config.file=/etc/prometheus/prometheus.yml \
             --storage.tsdb.path=/var/lib/prometheus \
-            --web.console.templates=/opt/prometheus-{{ prometheus_version }}.linux-amd64/consoles \
-            --web.console.libraries=/opt/prometheus-{{ prometheus_version }}.linux-amd64/console_libraries
+            --web.console.templates=/opt/prometheus/consoles \
+            --web.console.libraries=/opt/prometheus/console_libraries
           Restart=always
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Enable and start Prometheus service
+    - name: Reload and start Prometheus service
       systemd:
         name: prometheus
         daemon_reload: yes
@@ -116,7 +117,7 @@
         enabled: yes
 
     # --- Node Exporter Installation ---
-    - name: Create node_exporter system user
+    - name: Create Node Exporter system user
       user:
         name: node_exporter
         shell: /usr/sbin/nologin
@@ -141,7 +142,7 @@
       args:
         creates: /usr/local/bin/node_exporter
 
-    - name: Set Node Exporter permissions
+    - name: Set permissions for Node Exporter
       file:
         path: /usr/local/bin/node_exporter
         mode: '0755'
@@ -162,7 +163,7 @@
           [Install]
           WantedBy=multi-user.target
 
-    - name: Enable and start Node Exporter service
+    - name: Reload and start Node Exporter service
       systemd:
         name: node_exporter
         daemon_reload: yes
@@ -170,10 +171,10 @@
         enabled: yes
 
     # --- Grafana Installation ---
-    - name: Add Grafana GPG key and repository
+    - name: Add Grafana repository and GPG key
       shell: |
         mkdir -p /etc/apt/keyrings/
-        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/keyrings/grafana.gpg > /dev/null
         chmod 644 /etc/apt/keyrings/grafana.gpg
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | tee /etc/apt/sources.list.d/grafana.list
         apt-get update -y
