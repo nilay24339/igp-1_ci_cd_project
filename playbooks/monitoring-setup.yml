@@ -2,11 +2,15 @@
 - name: Setup Prometheus, Node Exporter, and Grafana Monitoring
   hosts: localhost
   become: yes
-  tasks:
+  vars:
+    prometheus_version: "2.53.0"
+    node_exporter_version: "1.8.1"
+    grafana_api_url: "http://localhost:3000/api"
+    grafana_user: "admin"
+    grafana_password: "admin"
 
-    # ---------------------------
-    # 1️⃣ Install Dependencies
-    # ---------------------------
+  tasks:
+    # --- Base setup ---
     - name: Update APT packages
       apt:
         update_cache: yes
@@ -17,57 +21,63 @@
           - wget
           - tar
           - curl
-          - apt-transport-https
-          - software-properties-common
+          - jq
         state: present
 
-    # ---------------------------
-    # 2️⃣ Install Prometheus
-    # ---------------------------
+    # --- Prometheus installation ---
     - name: Create Prometheus user and directories
       file:
         path: "{{ item }}"
         state: directory
+        owner: prometheus
+        group: prometheus
         mode: '0755'
       loop:
         - /etc/prometheus
         - /var/lib/prometheus
 
-    - name: Download Prometheus
+    - name: Download Prometheus tarball
       get_url:
-        url: "https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz"
+        url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
         dest: /tmp/prometheus.tar.gz
+        mode: '0644'
 
     - name: Extract Prometheus
       unarchive:
         src: /tmp/prometheus.tar.gz
         dest: /opt/
         remote_src: yes
+        creates: /opt/prometheus-{{ prometheus_version }}.linux-amd64
 
     - name: Copy Prometheus binaries
-      copy:
-        src: /opt/prometheus-2.53.0.linux-amd64/{{ item }}
-        dest: /usr/local/bin/{{ item }}
+      command: cp /opt/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }} /usr/local/bin/
+      args:
+        creates: /usr/local/bin/{{ item }}
+      loop:
+        - prometheus
+        - promtool
+
+    - name: Set permissions for Prometheus binaries
+      file:
+        path: /usr/local/bin/{{ item }}
         mode: '0755'
       loop:
         - prometheus
         - promtool
 
-    - name: Create Prometheus config
+    - name: Create Prometheus configuration file
       copy:
         dest: /etc/prometheus/prometheus.yml
         content: |
           global:
             scrape_interval: 5s
-
           scrape_configs:
-            - job_name: 'prometheus'
+            - job_name: "prometheus"
               static_configs:
-                - targets: ['localhost:9090']
-
-            - job_name: 'node_exporter'
+                - targets: ["localhost:9090"]
+            - job_name: "node_exporter"
               static_configs:
-                - targets: ['localhost:9100']
+                - targets: ["localhost:9100"]
 
     - name: Create Prometheus systemd service
       copy:
@@ -75,45 +85,45 @@
         content: |
           [Unit]
           Description=Prometheus Monitoring
-          After=network.target
+          After=network-online.target
 
           [Service]
-          User=root
+          User=prometheus
           ExecStart=/usr/local/bin/prometheus \
             --config.file=/etc/prometheus/prometheus.yml \
             --storage.tsdb.path=/var/lib/prometheus \
-            --web.console.templates=/opt/prometheus-2.53.0.linux-amd64/consoles \
-            --web.console.libraries=/opt/prometheus-2.53.0.linux-amd64/console_libraries
+            --web.console.templates=/opt/prometheus-{{ prometheus_version }}.linux-amd64/consoles \
+            --web.console.libraries=/opt/prometheus-{{ prometheus_version }}.linux-amd64/console_libraries
           Restart=always
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Enable and start Prometheus
+    - name: Reload and enable Prometheus service
       systemd:
         name: prometheus
-        enabled: yes
+        daemon_reload: yes
         state: started
+        enabled: yes
 
-    # ---------------------------
-    # 3️⃣ Install Node Exporter
-    # ---------------------------
+    # --- Node Exporter installation ---
     - name: Download Node Exporter
       get_url:
-        url: "https://github.com/prometheus/node_exporter/releases/download/v1.8.1/node_exporter-1.8.1.linux-amd64.tar.gz"
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
         dest: /tmp/node_exporter.tar.gz
+        mode: '0644'
 
     - name: Extract Node Exporter
       unarchive:
         src: /tmp/node_exporter.tar.gz
         dest: /opt/
         remote_src: yes
+        creates: /opt/node_exporter-{{ node_exporter_version }}.linux-amd64
 
     - name: Copy Node Exporter binary
-      copy:
-        src: /opt/node_exporter-1.8.1.linux-amd64/node_exporter
-        dest: /usr/local/bin/node_exporter
-        mode: '0755'
+      command: cp /opt/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter /usr/local/bin/
+      args:
+        creates: /usr/local/bin/node_exporter
 
     - name: Create Node Exporter systemd service
       copy:
@@ -124,94 +134,97 @@
           After=network.target
 
           [Service]
-          User=root
           ExecStart=/usr/local/bin/node_exporter
           Restart=always
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Enable and start Node Exporter
+    - name: Reload and enable Node Exporter
       systemd:
         name: node_exporter
-        enabled: yes
+        daemon_reload: yes
         state: started
+        enabled: yes
 
-    # ---------------------------
-    # 4️⃣ Install Grafana
-    # ---------------------------
-    - name: Add Grafana APT key and repo
-      shell: |
+    # --- Grafana installation ---
+    - name: Add Grafana APT key securely
+      ansible.builtin.shell: |
         set -e
-        sudo mkdir -p /etc/apt/keyrings/
-        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
-        sudo apt-get update -y
+        mkdir -p /etc/apt/keyrings/
+        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/keyrings/grafana.gpg > /dev/null
+        chmod 644 /etc/apt/keyrings/grafana.gpg
+      args:
+        creates: /etc/apt/keyrings/grafana.gpg
+
+    - name: Add Grafana APT repository
+      copy:
+        dest: /etc/apt/sources.list.d/grafana.list
+        content: |
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main
 
     - name: Install Grafana
       apt:
         name: grafana
+        update_cache: yes
         state: present
 
-    - name: Enable and start Grafana
+    - name: Enable and start Grafana service
       systemd:
         name: grafana-server
         enabled: yes
         state: started
 
-    # ---------------------------
-    # 5️⃣ Grafana Auto-Provisioning
-    # ---------------------------
-    - name: Create Grafana provisioning directories
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop:
-        - /etc/grafana/provisioning/datasources
-        - /etc/grafana/provisioning/dashboards
+    # --- Grafana auto configuration ---
+    - name: Wait for Grafana to start
+      wait_for:
+        host: "localhost"
+        port: 3000
+        delay: 10
+        timeout: 60
 
-    - name: Create Prometheus data source config for Grafana
-      copy:
-        dest: /etc/grafana/provisioning/datasources/prometheus.yml
-        content: |
-          apiVersion: 1
-          datasources:
-            - name: Prometheus
-              type: prometheus
-              access: proxy
-              url: http://localhost:9090
-              isDefault: true
+    - name: Add Prometheus data source to Grafana
+      uri:
+        url: "{{ grafana_api_url }}/datasources"
+        method: POST
+        user: "{{ grafana_user }}"
+        password: "{{ grafana_password }}"
+        force_basic_auth: yes
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "Prometheus"
+          type: "prometheus"
+          access: "proxy"
+          url: "http://localhost:9090"
+          isDefault: true
+      register: grafana_ds
 
-    - name: Create dashboard provisioning config
-      copy:
-        dest: /etc/grafana/provisioning/dashboards/dashboard.yml
-        content: |
-          apiVersion: 1
-          providers:
-            - name: 'Node Exporter Dashboards'
-              orgId: 1
-              folder: ''
-              type: file
-              disableDeletion: false
-              editable: true
-              options:
-                path: /var/lib/grafana/dashboards
-
-    - name: Create dashboards directory
-      file:
-        path: /var/lib/grafana/dashboards
-        state: directory
-        mode: '0755'
-
-    - name: Download Node Exporter Full dashboard (ID 1860)
-      get_url:
-        url: https://grafana.com/api/dashboards/1860/revisions/31/download
-        dest: /var/lib/grafana/dashboards/node_exporter_full.json
-        mode: '0644'
-
-    - name: Restart Grafana to apply configuration
-      systemd:
-        name: grafana-server
-        state: restarted
+    - name: Import Node Exporter Full Dashboard
+      uri:
+        url: "{{ grafana_api_url }}/dashboards/import"
+        method: POST
+        user: "{{ grafana_user }}"
+        password: "{{ grafana_password }}"
+        force_basic_auth: yes
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body: >
+          {
+            "dashboard": {
+              "id": 1860
+            },
+            "overwrite": true,
+            "inputs": [
+              {
+                "name": "DS_PROMETHEUS",
+                "type": "datasource",
+                "pluginId": "prometheus",
+                "value": "Prometheus"
+              }
+            ]
+          }
+      when: grafana_ds.status == 200
 
