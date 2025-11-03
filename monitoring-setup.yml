@@ -1,0 +1,157 @@
+---
+- hosts: localhost
+  become: true
+  connection: local
+  gather_facts: yes
+
+  tasks:
+    # ---------------------------
+    # 1️⃣ Install and Configure Prometheus
+    # ---------------------------
+    - name: Install Prometheus dependencies
+      apt:
+        name:
+          - wget
+          - tar
+        state: present
+        update_cache: yes
+
+    - name: Create Prometheus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/prometheus
+        - /var/lib/prometheus
+
+    - name: Download and install Prometheus
+      shell: |
+        cd /tmp
+        wget https://github.com/prometheus/prometheus/releases/download/v2.53.1/prometheus-2.53.1.linux-amd64.tar.gz
+        tar xvf prometheus-2.53.1.linux-amd64.tar.gz
+        cp prometheus-2.53.1.linux-amd64/prometheus /usr/local/bin/
+        cp prometheus-2.53.1.linux-amd64/promtool /usr/local/bin/
+        cp -r prometheus-2.53.1.linux-amd64/consoles /etc/prometheus
+        cp -r prometheus-2.53.1.linux-amd64/console_libraries /etc/prometheus
+      args:
+        creates: /usr/local/bin/prometheus
+
+    - name: Create Prometheus config file
+      copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['localhost:9100']
+
+    - name: Create systemd service for Prometheus
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus Monitoring
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=root
+          ExecStart=/usr/local/bin/prometheus \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/var/lib/prometheus/ \
+            --web.console.templates=/etc/prometheus/consoles \
+            --web.console.libraries=/etc/prometheus/console_libraries
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Prometheus
+      systemd:
+        name: prometheus
+        enabled: true
+        state: started
+
+    # ---------------------------
+    # 2️⃣ Install and Configure Node Exporter
+    # ---------------------------
+    - name: Download and install Node Exporter
+      shell: |
+        cd /tmp
+        wget https://github.com/prometheus/node_exporter/releases/download/v1.8.1/node_exporter-1.8.1.linux-amd64.tar.gz
+        tar xvf node_exporter-1.8.1.linux-amd64.tar.gz
+        cp node_exporter-1.8.1.linux-amd64/node_exporter /usr/local/bin/
+      args:
+        creates: /usr/local/bin/node_exporter
+
+    - name: Create systemd service for Node Exporter
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          User=root
+          ExecStart=/usr/local/bin/node_exporter
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Node Exporter
+      systemd:
+        name: node_exporter
+        enabled: true
+        state: started
+
+    # ---------------------------
+    # 3️⃣ Install and Configure Grafana
+    # ---------------------------
+    - name: Install Grafana securely
+      shell: |
+        set -e
+        mkdir -p /etc/apt/keyrings/
+        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/keyrings/grafana.gpg > /dev/null
+        chmod 644 /etc/apt/keyrings/grafana.gpg
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | tee /etc/apt/sources.list.d/grafana.list
+        apt-get update -y
+        apt-get install grafana -y
+        systemctl daemon-reload
+        systemctl enable grafana-server
+        systemctl start grafana-server
+      args:
+        executable: /bin/bash
+
+    - name: Verify Grafana service
+      command: systemctl status grafana-server
+      register: grafana_status
+      ignore_errors: yes
+
+    # ---------------------------
+    # 4️⃣ Verify all services
+    # ---------------------------
+    - name: Verify Prometheus service
+      command: systemctl status prometheus
+      register: prometheus_status
+      ignore_errors: yes
+
+    - name: Verify Node Exporter service
+      command: systemctl status node_exporter
+      register: node_status
+      ignore_errors: yes
+
+    - name: Display status summary
+      debug:
+        msg:
+          - "✅ Prometheus: {{ prometheus_status.stdout }}"
+          - "✅ Node Exporter: {{ node_status.stdout }}"
+          - "✅ Grafana: {{ grafana_status.stdout }}"
+
