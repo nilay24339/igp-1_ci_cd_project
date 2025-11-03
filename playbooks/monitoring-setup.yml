@@ -1,0 +1,217 @@
+---
+- name: Setup Prometheus, Node Exporter, and Grafana Monitoring
+  hosts: localhost
+  become: yes
+  tasks:
+
+    # ---------------------------
+    # 1️⃣ Install Dependencies
+    # ---------------------------
+    - name: Update APT packages
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - wget
+          - tar
+          - curl
+          - apt-transport-https
+          - software-properties-common
+        state: present
+
+    # ---------------------------
+    # 2️⃣ Install Prometheus
+    # ---------------------------
+    - name: Create Prometheus user and directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/prometheus
+        - /var/lib/prometheus
+
+    - name: Download Prometheus
+      get_url:
+        url: "https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz"
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Extract Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Copy Prometheus binaries
+      copy:
+        src: /opt/prometheus-2.53.0.linux-amd64/{{ item }}
+        dest: /usr/local/bin/{{ item }}
+        mode: '0755'
+      loop:
+        - prometheus
+        - promtool
+
+    - name: Create Prometheus config
+      copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 5s
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['localhost:9100']
+
+    - name: Create Prometheus systemd service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus Monitoring
+          After=network.target
+
+          [Service]
+          User=root
+          ExecStart=/usr/local/bin/prometheus \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/var/lib/prometheus \
+            --web.console.templates=/opt/prometheus-2.53.0.linux-amd64/consoles \
+            --web.console.libraries=/opt/prometheus-2.53.0.linux-amd64/console_libraries
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Prometheus
+      systemd:
+        name: prometheus
+        enabled: yes
+        state: started
+
+    # ---------------------------
+    # 3️⃣ Install Node Exporter
+    # ---------------------------
+    - name: Download Node Exporter
+      get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v1.8.1/node_exporter-1.8.1.linux-amd64.tar.gz"
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Copy Node Exporter binary
+      copy:
+        src: /opt/node_exporter-1.8.1.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+
+    - name: Create Node Exporter systemd service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          User=root
+          ExecStart=/usr/local/bin/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Node Exporter
+      systemd:
+        name: node_exporter
+        enabled: yes
+        state: started
+
+    # ---------------------------
+    # 4️⃣ Install Grafana
+    # ---------------------------
+    - name: Add Grafana APT key and repo
+      shell: |
+        set -e
+        sudo mkdir -p /etc/apt/keyrings/
+        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+        sudo apt-get update -y
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        state: present
+
+    - name: Enable and start Grafana
+      systemd:
+        name: grafana-server
+        enabled: yes
+        state: started
+
+    # ---------------------------
+    # 5️⃣ Grafana Auto-Provisioning
+    # ---------------------------
+    - name: Create Grafana provisioning directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/grafana/provisioning/datasources
+        - /etc/grafana/provisioning/dashboards
+
+    - name: Create Prometheus data source config for Grafana
+      copy:
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://localhost:9090
+              isDefault: true
+
+    - name: Create dashboard provisioning config
+      copy:
+        dest: /etc/grafana/provisioning/dashboards/dashboard.yml
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'Node Exporter Dashboards'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              editable: true
+              options:
+                path: /var/lib/grafana/dashboards
+
+    - name: Create dashboards directory
+      file:
+        path: /var/lib/grafana/dashboards
+        state: directory
+        mode: '0755'
+
+    - name: Download Node Exporter Full dashboard (ID 1860)
+      get_url:
+        url: https://grafana.com/api/dashboards/1860/revisions/31/download
+        dest: /var/lib/grafana/dashboards/node_exporter_full.json
+        mode: '0644'
+
+    - name: Restart Grafana to apply configuration
+      systemd:
+        name: grafana-server
+        state: restarted
+
