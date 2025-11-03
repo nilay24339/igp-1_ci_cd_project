@@ -3,8 +3,8 @@
   gather_facts: yes
 
   vars:
-    ansible_python_interpreter: /home/ubuntu/ansible-venv/bin/python3   # Use venv Python
-    docker_image: "{{ lookup('vars', 'docker_image') | default('nilay2497/myapp:latest') }}"
+    ansible_python_interpreter: /home/ubuntu/ansible-venv/bin/python3
+    default_docker_image: "nilay2497/myapp:latest"
     namespace: "default"
     deployment_name: "myapp-deployment"
     service_name: "myapp-service"
@@ -13,6 +13,10 @@
     service_port: 8081
 
   tasks:
+
+    - name: Determine Docker image to deploy
+      set_fact:
+        effective_image: "{{ docker_image | default(default_docker_image) }}"
 
     - name: Ensure required Python libraries are installed in venv
       pip:
@@ -52,7 +56,7 @@
               spec:
                 containers:
                   - name: "{{ app_label }}"
-                    image: "{{ docker_image }}"
+                    image: "{{ effective_image }}"
                     ports:
                       - containerPort: "{{ container_port }}"
                     imagePullPolicy: Always
