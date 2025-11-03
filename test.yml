@@ -1,6 +1,0 @@
-# test.yml
-- hosts: localhost
-  tasks:
-    - name: Check connectivity
-      ping:
-
