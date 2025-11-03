@@ -1,0 +1,67 @@
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    docker_image: "{{ docker_image | default('nilay2497/myapp:latest') }}"
+    namespace: "default"  # Change if you want a specific namespace
+    deployment_name: "myapp-deployment"
+    service_name: "myapp-service"
+    app_label: "myapp"
+    container_port: 8080
+    service_port: 8081
+
+  tasks:
+
+    - name: Ensure Kubernetes namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+
+    - name: Create/Update Kubernetes Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ deployment_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: "{{ app_label }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_label }}"
+              spec:
+                containers:
+                  - name: "{{ app_label }}"
+                    image: "{{ docker_image }}"
+                    ports:
+                      - containerPort: "{{ container_port }}"
+
+    - name: Create/Update Kubernetes Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ service_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            selector:
+              app: "{{ app_label }}"
+            ports:
+              - protocol: TCP
+                port: "{{ service_port }}"
+                targetPort: "{{ container_port }}"
+            type: NodePort
+
