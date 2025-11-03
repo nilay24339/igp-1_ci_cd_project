@@ -1,4 +1,6 @@
 - hosts: localhost
+   connection: local
+   gather_facts: yes
   vars:
     docker_repo: "nilay2497/myapp"
     docker_tag: "latest"
