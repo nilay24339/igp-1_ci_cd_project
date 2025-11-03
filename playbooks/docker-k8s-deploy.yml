@@ -3,8 +3,9 @@
   gather_facts: yes
 
   vars:
+    ansible_python_interpreter: /home/ubuntu/ansible-venv/bin/python3   # Use your venv Python
     docker_image: "{{ docker_image | default('nilay2497/myapp:latest') }}"
-    namespace: "default"  # Change if you want a specific namespace
+    namespace: "default"
     deployment_name: "myapp-deployment"
     service_name: "myapp-service"
     app_label: "myapp"
@@ -12,6 +13,14 @@
     service_port: 8081
 
   tasks:
+
+    - name: Ensure required Python libraries are installed in venv
+      pip:
+        name:
+          - kubernetes
+          - openshift
+        state: present
+        executable: /home/ubuntu/ansible-venv/bin/pip
 
     - name: Ensure Kubernetes namespace exists
       kubernetes.core.k8s:
@@ -46,6 +55,7 @@
                     image: "{{ docker_image }}"
                     ports:
                       - containerPort: "{{ container_port }}"
+                    imagePullPolicy: Always
 
     - name: Create/Update Kubernetes Service
       kubernetes.core.k8s:
