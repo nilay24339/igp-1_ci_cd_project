@@ -3,8 +3,8 @@
   gather_facts: yes
 
   vars:
-    ansible_python_interpreter: /home/ubuntu/ansible-venv/bin/python3   # Use your venv Python
-    docker_image: "{{ docker_image | default('nilay2497/myapp:latest') }}"
+    ansible_python_interpreter: /home/ubuntu/ansible-venv/bin/python3   # Use venv Python
+    docker_image: "{{ lookup('vars', 'docker_image') | default('nilay2497/myapp:latest') }}"
     namespace: "default"
     deployment_name: "myapp-deployment"
     service_name: "myapp-service"
