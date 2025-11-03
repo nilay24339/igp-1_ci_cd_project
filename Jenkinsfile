@@ -16,9 +16,17 @@ pipeline {
             }
         }
 
-        stage('Compile') { steps { sh 'mvn clean compile' } }
-        stage('Test') { steps { sh 'mvn test' } }
-        stage('Package') { steps { sh 'mvn package' } }
+        stage('Compile') {
+            steps { sh 'mvn clean compile' }
+        }
+
+        stage('Test') {
+            steps { sh 'mvn test' }
+        }
+
+        stage('Package') {
+            steps { sh 'mvn package' }
+        }
 
         stage('Docker Build') {
             steps {
@@ -51,7 +59,6 @@ pipeline {
         stage('Deploy via Ansible to Kubernetes') {
             steps {
                 script {
-                    // Activate venv and export KUBECONFIG for Ansible
                     sh '''
                         set -e
                         . ${VENV_PATH}/bin/activate
@@ -64,7 +71,25 @@ pipeline {
                             -e "docker_image=${DOCKER_IMAGE}" \
                             -e "ansible_python_interpreter=${VENV_PATH}/bin/python3"
                     '''
-                    echo "✅ Deployment completed successfully!"
+                    echo "✅ Kubernetes Deployment completed successfully!"
+                }
+            }
+        }
+
+        stage('Setup Monitoring (Prometheus + Grafana)') {
+            steps {
+                script {
+                    sh '''
+                        set -e
+                        . ${VENV_PATH}/bin/activate
+                        echo "Setting up Prometheus, Node Exporter, and Grafana..."
+
+                        ansible-playbook playbooks/monitoring-setup.yml \
+                            -i inventory/hosts.ini \
+                            -e "ansible_python_interpreter=${VENV_PATH}/bin/python3"
+
+                        echo "✅ Monitoring setup completed successfully!"
+                    '''
                 }
             }
         }
@@ -73,10 +98,13 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "Checking Kubernetes pods status..."
+                        echo "Checking Kubernetes pods and services..."
                         kubectl get pods -n default --kubeconfig ${KUBECONFIG}
-                        echo "Checking service accessibility..."
                         kubectl get svc -n default --kubeconfig ${KUBECONFIG}
+
+                        echo "Checking Prometheus & Grafana status..."
+                        systemctl is-active prometheus || echo "Prometheus not running!"
+                        systemctl is-active grafana-server || echo "Grafana not running!"
                     '''
                 }
             }
@@ -85,10 +113,17 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Deployment successful — your application is running in Minikube!"
+            echo "🎉 Pipeline completed successfully!"
+            echo "----------------------------------------------------"
+            echo "✅ App URL:           http://<EC2-IP>:8081"
+            echo "✅ Prometheus:        http://<EC2-IP>:9090"
+            echo "✅ Node Exporter:     http://<EC2-IP>:9100/metrics"
+            echo "✅ Grafana Dashboard: http://<EC2-IP>:3000"
+            echo "Login → admin/admin"
+            echo "----------------------------------------------------"
         }
         failure {
-            echo "❌ Deployment failed — please check the Ansible/Kubernetes permissions."
+            echo "❌ Deployment or Monitoring failed — check Ansible logs and permissions."
         }
         always {
             echo "Pipeline finished."
