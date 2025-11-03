@@ -1,18 +1,20 @@
 - hosts: localhost
-   connection: local
-   gather_facts: yes
+  connection: local
+  gather_facts: yes
+
   vars:
     docker_repo: "nilay2497/myapp"
     docker_tag: "latest"
     container_name: "myapp-container"
     port_mapping: "8081:8080"
+
   tasks:
     - name: Build Docker image
       community.docker.docker_image:
         name: "{{ docker_repo }}"
         tag: "{{ docker_tag }}"
         build:
-          path: "../app"
+          path: "."
 
     - name: Remove old container if exists
       community.docker.docker_container:
