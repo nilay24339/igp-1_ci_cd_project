@@ -1,4 +1,7 @@
 - hosts: localhost
+  connection: local
+  gather_facts: yes
+
   tasks:
     - name: Create Kubernetes Deployment
       kubernetes.core.k8s:
