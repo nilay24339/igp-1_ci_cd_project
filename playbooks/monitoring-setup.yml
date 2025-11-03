@@ -2,18 +2,18 @@
 - name: Setup Prometheus, Node Exporter, and Grafana Monitoring
   hosts: localhost
   become: yes
+
   vars:
     prometheus_version: "2.53.0"
     node_exporter_version: "1.8.1"
-    grafana_api_url: "http://localhost:3000/api"
-    grafana_user: "admin"
-    grafana_password: "admin"
 
   tasks:
-    # --- Base setup ---
+
+    # --- System Preparation ---
     - name: Update APT packages
       apt:
         update_cache: yes
+        cache_valid_time: 3600
 
     - name: Install required packages
       apt:
@@ -21,11 +21,20 @@
           - wget
           - tar
           - curl
-          - jq
+          - apt-transport-https
+          - software-properties-common
+          - gnupg
         state: present
 
-    # --- Prometheus installation ---
-    - name: Create Prometheus user and directories
+    # --- Prometheus Installation ---
+    - name: Create Prometheus system user
+      user:
+        name: prometheus
+        shell: /usr/sbin/nologin
+        system: yes
+        create_home: no
+
+    - name: Create Prometheus directories
       file:
         path: "{{ item }}"
         state: directory
@@ -36,7 +45,7 @@
         - /etc/prometheus
         - /var/lib/prometheus
 
-    - name: Download Prometheus tarball
+    - name: Download Prometheus
       get_url:
         url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
         dest: /tmp/prometheus.tar.gz
@@ -65,7 +74,7 @@
         - prometheus
         - promtool
 
-    - name: Create Prometheus configuration file
+    - name: Configure Prometheus
       copy:
         dest: /etc/prometheus/prometheus.yml
         content: |
@@ -99,14 +108,21 @@
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload and enable Prometheus service
+    - name: Enable and start Prometheus service
       systemd:
         name: prometheus
         daemon_reload: yes
         state: started
         enabled: yes
 
-    # --- Node Exporter installation ---
+    # --- Node Exporter Installation ---
+    - name: Create node_exporter system user
+      user:
+        name: node_exporter
+        shell: /usr/sbin/nologin
+        system: yes
+        create_home: no
+
     - name: Download Node Exporter
       get_url:
         url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
@@ -125,106 +141,51 @@
       args:
         creates: /usr/local/bin/node_exporter
 
+    - name: Set Node Exporter permissions
+      file:
+        path: /usr/local/bin/node_exporter
+        mode: '0755'
+
     - name: Create Node Exporter systemd service
       copy:
         dest: /etc/systemd/system/node_exporter.service
         content: |
           [Unit]
           Description=Node Exporter
-          After=network.target
+          After=network-online.target
 
           [Service]
+          User=node_exporter
           ExecStart=/usr/local/bin/node_exporter
           Restart=always
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload and enable Node Exporter
+    - name: Enable and start Node Exporter service
       systemd:
         name: node_exporter
         daemon_reload: yes
         state: started
         enabled: yes
 
-    # --- Grafana installation ---
-    - name: Add Grafana APT key securely
-      ansible.builtin.shell: |
-        set -e
+    # --- Grafana Installation ---
+    - name: Add Grafana GPG key and repository
+      shell: |
         mkdir -p /etc/apt/keyrings/
-        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/keyrings/grafana.gpg > /dev/null
+        wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
         chmod 644 /etc/apt/keyrings/grafana.gpg
-      args:
-        creates: /etc/apt/keyrings/grafana.gpg
-
-    - name: Add Grafana APT repository
-      copy:
-        dest: /etc/apt/sources.list.d/grafana.list
-        content: |
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | tee /etc/apt/sources.list.d/grafana.list
+        apt-get update -y
 
     - name: Install Grafana
       apt:
         name: grafana
-        update_cache: yes
         state: present
+        update_cache: yes
 
     - name: Enable and start Grafana service
       systemd:
         name: grafana-server
         enabled: yes
         state: started
-
-    # --- Grafana auto configuration ---
-    - name: Wait for Grafana to start
-      wait_for:
-        host: "localhost"
-        port: 3000
-        delay: 10
-        timeout: 60
-
-    - name: Add Prometheus data source to Grafana
-      uri:
-        url: "{{ grafana_api_url }}/datasources"
-        method: POST
-        user: "{{ grafana_user }}"
-        password: "{{ grafana_password }}"
-        force_basic_auth: yes
-        headers:
-          Content-Type: "application/json"
-        body_format: json
-        body:
-          name: "Prometheus"
-          type: "prometheus"
-          access: "proxy"
-          url: "http://localhost:9090"
-          isDefault: true
-      register: grafana_ds
-
-    - name: Import Node Exporter Full Dashboard
-      uri:
-        url: "{{ grafana_api_url }}/dashboards/import"
-        method: POST
-        user: "{{ grafana_user }}"
-        password: "{{ grafana_password }}"
-        force_basic_auth: yes
-        headers:
-          Content-Type: "application/json"
-        body_format: json
-        body: >
-          {
-            "dashboard": {
-              "id": 1860
-            },
-            "overwrite": true,
-            "inputs": [
-              {
-                "name": "DS_PROMETHEUS",
-                "type": "datasource",
-                "pluginId": "prometheus",
-                "value": "Prometheus"
-              }
-            ]
-          }
-      when: grafana_ds.status == 200
-
